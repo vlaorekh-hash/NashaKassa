@@ -193,6 +193,72 @@
 
 .row.spread { justify-content: space-between; align-items: center; }
 
+.summaryHeader {
+  display: flex;
+  align-items: baseline;
+  gap: 8px;
+  margin-top: 10px;
+  flex-wrap: wrap;
+}
+
+.summaryCollected {
+  font-size: 26px;
+  font-weight: 700;
+  line-height: 1.1;
+}
+
+.summaryTarget {
+  font-size: 13px;
+}
+
+.progressTrack {
+  margin-top: 8px;
+  height: 8px;
+  border-radius: 999px;
+  background: rgba(0, 0, 0, 0.08);
+  overflow: hidden;
+}
+
+.progressFill {
+  height: 100%;
+  border-radius: 999px;
+  background: var(--button);
+  transition: width 0.3s ease;
+}
+
+.nextRecipient {
+  margin-top: 14px;
+  padding-top: 12px;
+  border-top: 1px solid rgba(0, 0, 0, 0.08);
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.recipientLine {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+
+.recipientName {
+  font-weight: 600;
+  font-size: 15px;
+  flex: 1;
+}
+
+.recipientAmount {
+  font-weight: 600;
+  color: var(--link);
+}
+
+.recipientDate {
+  color: var(--hint);
+  font-size: 13px;
+}
+
 .muted { color: var(--hint); font-size: 13px; }
 
 .ledger {
