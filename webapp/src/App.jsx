@@ -249,6 +249,12 @@ function GroupDetail({ groupId, me, onBack }) {
   const confirmedCount = cycle?.contributions.filter((c) => c.status === 'confirmed').length || 0;
   const allConfirmed = cycle && confirmedCount === members.filter((m) => m.active).length;
 
+  // Целевая сумма: для ротационной кассы — взнос × число участников (задаётся сервером),
+  // для накопительной — общая цель, если её указали при создании (необязательное поле).
+  const targetAmount = group.type === 'rotation' ? cycle?.expectedTotal : group.goal_amount;
+  const collectedAmount = cycle?.confirmedTotal ?? 0;
+  const progressPercent = targetAmount ? Math.min(100, Math.round((collectedAmount / targetAmount) * 100)) : null;
+
   const doContribute = async () => {
     setBusy(true);
     try {
@@ -304,24 +310,39 @@ function GroupDetail({ groupId, me, onBack }) {
 
       <section className="panel">
         <div className="row spread">
-          <span className="muted">{group.type === 'rotation' ? 'Ротационная касса' : 'Накопительная касса'}</span>
+          <span className="muted">
+            {group.type === 'rotation' ? 'Ротационная касса' : 'Накопительная касса'}
+            {cycle && group.type === 'rotation' ? ` · цикл №${cycle.cycle_number}` : ''}
+          </span>
           <button className="linkBtn" onClick={copyInvite}>{copied ? 'Скопировано ✓' : 'Пригласить'}</button>
         </div>
 
-        {cycle && group.type === 'rotation' && (
+        {cycle && (
           <>
-            <div className="row spread">
-              <span className="muted">Цикл</span>
-              <span>№{cycle.cycle_number} · до {formatDate(cycle.period_end)}</span>
+            <div className="summaryHeader">
+              <div className="summaryCollected">{money(collectedAmount)}</div>
+              <div className="summaryTarget muted">
+                {targetAmount != null ? `из ${money(targetAmount)}` : 'цель не задана'}
+                {progressPercent != null ? ` · ${progressPercent}%` : ''}
+              </div>
             </div>
-            <div className="row spread">
-              <span className="muted">Получатель</span>
-              <span>{cycle.recipient?.first_name}{isRecipient ? ' (вы)' : ''}</span>
-            </div>
-            <div className="row spread">
-              <span className="muted">Собрано</span>
-              <span>{money(cycle.confirmedTotal)} из {money(cycle.expectedTotal)}</span>
-            </div>
+
+            {progressPercent != null && (
+              <div className="progressTrack">
+                <div className="progressFill" style={{ width: `${progressPercent}%` }} />
+              </div>
+            )}
+
+            {group.type === 'rotation' && cycle.recipient && (
+              <div className="nextRecipient">
+                <span className="muted">Получит</span>
+                <div className="recipientLine">
+                  <span className="recipientName">{cycle.recipient.first_name}{isRecipient ? ' (вы)' : ''}</span>
+                  <span className="recipientAmount">{targetAmount != null ? money(targetAmount) : '—'}</span>
+                  <span className="recipientDate">{formatDate(cycle.period_end)}</span>
+                </div>
+              </div>
+            )}
           </>
         )}
       </section>
