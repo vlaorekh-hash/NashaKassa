@@ -39,9 +39,42 @@ app.listen(PORT, () => {
   console.log(`[server] слушает на порту ${PORT}`);
 });
 
+// Telegram разрешает только одно активное long-polling соединение на токен бота.
+// При редеплое старый процесс может ещё секунду-другую доживать, пока стартует новый —
+// getUpdates в этот момент вернёт 409 Conflict. Раньше это роняло весь сервер
+// (необработанный reject из bot.launch() в Node 24 завершает процесс) — теперь просто
+// подождём и попробуем снова, вместо того чтобы валить деплой.
+async function startBotWithRetry(bot, { retries = 5, baseDelayMs = 3000 } = {}) {
+  for (let attempt = 1; attempt <= retries; attempt++) {
+    try {
+      await bot.launch();
+      console.log('[bot] запущен (long polling)');
+      return;
+    } catch (err) {
+      const isConflict = err?.response?.error_code === 409;
+      console.error(
+        `[bot] не удалось запустить (попытка ${attempt}/${retries})${isConflict ? ' — конфликт с другим экземпляром' : ''}:`,
+        err?.message || err
+      );
+      if (attempt === retries) {
+        console.error(
+          '[bot] бот не поднялся после нескольких попыток — сервер и API продолжают работать, ' +
+          'но бот не отвечает. Проверьте, не запущен ли где-то ещё процесс с этим же BOT_TOKEN.'
+        );
+        return;
+      }
+      await new Promise((resolve) => setTimeout(resolve, baseDelayMs * attempt));
+    }
+  }
+}
+
+process.on('unhandledRejection', (err) => {
+  console.error('[unhandledRejection]', err);
+});
+
 if (BOT_TOKEN) {
   const bot = createBot(BOT_TOKEN, WEBAPP_URL);
-  bot.launch().then(() => console.log('[bot] запущен (long polling)'));
+  startBotWithRetry(bot);
   startReminderSweep(bot, WEBAPP_URL);
 
   process.once('SIGINT', () => bot.stop('SIGINT'));
