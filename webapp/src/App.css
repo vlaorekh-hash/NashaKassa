@@ -1,0 +1,225 @@
+.centered {
+  height: 100vh;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  color: var(--hint);
+  padding: 24px;
+  text-align: center;
+}
+
+.devBanner {
+  background: #fff3cd;
+  color: #8a6d00;
+  font-size: 12px;
+  text-align: center;
+  padding: 6px;
+}
+
+.screen {
+  padding: 16px 16px 96px;
+  max-width: 480px;
+  margin: 0 auto;
+}
+
+.header {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-bottom: 16px;
+}
+
+.header h1 {
+  font-size: 20px;
+  margin: 0;
+  flex: 1;
+}
+
+.iconBtn {
+  background: none;
+  border: none;
+  font-size: 20px;
+  padding: 4px 8px;
+  color: var(--text);
+}
+
+.hint {
+  color: var(--hint);
+  font-size: 14px;
+  line-height: 1.4;
+}
+
+.hint.success { color: var(--success); }
+
+.error { color: var(--danger); font-size: 14px; }
+
+.list {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+
+.card {
+  background: var(--secondary-bg);
+  border: none;
+  border-radius: 14px;
+  padding: 14px 16px;
+  text-align: left;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  color: var(--text);
+}
+
+.cardTitle { font-weight: 600; font-size: 16px; }
+.cardSub { color: var(--hint); font-size: 13px; }
+
+.primaryBtn {
+  background: var(--button);
+  color: var(--button-text);
+  border: none;
+  border-radius: 12px;
+  padding: 13px 16px;
+  font-weight: 600;
+  width: 100%;
+  margin-top: 8px;
+}
+
+.primaryBtn:disabled { opacity: 0.6; }
+
+.dangerBtn {
+  background: transparent;
+  color: var(--danger);
+  border: 1px solid var(--danger);
+  border-radius: 12px;
+  padding: 11px 16px;
+  width: 100%;
+  margin-top: 8px;
+}
+
+.smallBtn {
+  background: var(--button);
+  color: var(--button-text);
+  border: none;
+  border-radius: 8px;
+  padding: 6px 10px;
+  font-size: 12px;
+}
+
+.linkBtn {
+  background: none;
+  border: none;
+  color: var(--link);
+  font-size: 14px;
+  padding: 0;
+}
+
+.fixedBottom {
+  position: fixed;
+  left: 16px;
+  right: 16px;
+  bottom: 16px;
+  max-width: 448px;
+  margin: 0 auto;
+}
+
+.form {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+
+.form label {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  font-size: 13px;
+  color: var(--hint);
+}
+
+.form input, .form textarea {
+  background: var(--secondary-bg);
+  border: 1px solid rgba(0,0,0,0.08);
+  border-radius: 10px;
+  padding: 10px 12px;
+  color: var(--text);
+}
+
+.fieldHint {
+  color: var(--hint);
+  font-size: 12px;
+  margin-top: -6px;
+}
+
+.segment {
+  display: flex;
+  gap: 8px;
+}
+
+.segment button {
+  flex: 1;
+  padding: 10px;
+  border-radius: 10px;
+  border: 1px solid rgba(0,0,0,0.1);
+  background: var(--secondary-bg);
+  color: var(--text);
+}
+
+.segment .segActive {
+  background: var(--button);
+  color: var(--button-text);
+  border-color: var(--button);
+}
+
+.panel {
+  background: var(--secondary-bg);
+  border-radius: 14px;
+  padding: 14px 16px;
+  margin-bottom: 12px;
+}
+
+.panel h2 {
+  font-size: 14px;
+  margin: 0 0 10px;
+  color: var(--hint);
+  text-transform: uppercase;
+  letter-spacing: 0.02em;
+}
+
+.row {
+  display: flex;
+  padding: 4px 0;
+}
+
+.row.spread { justify-content: space-between; align-items: center; }
+
+.muted { color: var(--hint); font-size: 13px; }
+
+.ledger {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.ledgerRow {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  font-size: 14px;
+}
+
+.status {
+  font-size: 12px;
+  padding: 2px 8px;
+  border-radius: 8px;
+  background: rgba(0,0,0,0.06);
+  color: var(--hint);
+}
+
+.status-confirmed { background: rgba(41,165,108,0.15); color: var(--success); }
+.status-pending { background: rgba(255,193,7,0.2); color: #8a6d00; }
+
+.manageActions {
+  margin-top: 12px;
+}
