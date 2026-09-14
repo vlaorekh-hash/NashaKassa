@@ -8,6 +8,10 @@ import {
   confirmContribution,
   closeCycleAndRotate,
   setPaymentDetails,
+  requestLoan,
+  decideLoan,
+  markLoanRepaid,
+  confirmLoanRepaid,
 } from './groups.js';
 
 export const router = Router();
@@ -35,6 +39,66 @@ function handle(fn) {
 }
 
 router.get('/me', handle((req) => ({ user: currentUser(req) })));
+
+router.put('/me/payment-details', handle((req) => {
+  setPaymentDetails(currentUser(req), String(req.body.payment_details || '').slice(0, 300));
+  return { ok: true };
+}));
+
+router.get('/groups', handle((req) => ({ groups: listMyGroups(req.tgUser.id) })));
+
+router.post('/groups', handle((req) => {
+  const { name, type, amount, frequency_days, goal_amount, goal_deadline } = req.body;
+  return createGroup(currentUser(req), {
+    name,
+    type,
+    amount: Number(amount),
+    frequency_days: Number(frequency_days),
+    goal_amount: goal_amount ? Number(goal_amount) : null,
+    goal_deadline: goal_deadline || null,
+  });
+}));
+
+router.get('/groups/:id', handle((req) => getGroupDetail(req.params.id, req.tgUser.id)));
+
+router.post('/groups/:id/join', handle((req) => joinGroup(req.params.id, currentUser(req))));
+
+router.post('/groups/:id/cycles/:cycleId/contribute', handle((req) => {
+  const amount = Number(req.body.amount);
+  return contribute(req.params.id, Number(req.params.cycleId), currentUser(req), amount);
+}));
+
+router.post('/groups/:id/cycles/:cycleId/confirm', handle((req) => {
+  const payerId = Number(req.body.telegram_id);
+  return confirmContribution(req.params.id, Number(req.params.cycleId), payerId, currentUser(req));
+}));
+
+router.post('/groups/:id/cycles/:cycleId/close', handle((req) => {
+  return closeCycleAndRotate(req.params.id, Number(req.params.cycleId), currentUser(req), {
+    force: Boolean(req.body.force),
+  });
+}));
+
+router.post('/groups/:id/loans', handle((req) => {
+  const { amount, reason, term_days } = req.body;
+  return requestLoan(req.params.id, currentUser(req), {
+    amount: Number(amount),
+    reason,
+    term_days: Number(term_days),
+  });
+}));
+
+router.post('/groups/:id/loans/:loanId/decide', handle((req) => {
+  return decideLoan(req.params.id, Number(req.params.loanId), currentUser(req), String(req.body.decision || ''));
+}));
+
+router.post('/groups/:id/loans/:loanId/mark-repaid', handle((req) => {
+  return markLoanRepaid(req.params.id, Number(req.params.loanId), currentUser(req));
+}));
+
+router.post('/groups/:id/loans/:loanId/confirm-repaid', handle((req) => {
+  return confirmLoanRepaid(req.params.id, Number(req.params.loanId), currentUser(req));
+}));router.get('/me', handle((req) => ({ user: currentUser(req) })));
 
 router.put('/me/payment-details', handle((req) => {
   setPaymentDetails(currentUser(req), String(req.body.payment_details || '').slice(0, 300));
