@@ -46,4 +46,12 @@ export const api = {
   contribute: (id, cycleId, amount) => request('POST', `/groups/${id}/cycles/${cycleId}/contribute`, { amount }),
   confirm: (id, cycleId, telegram_id) => request('POST', `/groups/${id}/cycles/${cycleId}/confirm`, { telegram_id }),
   closeCycle: (id, cycleId, force = false) => request('POST', `/groups/${id}/cycles/${cycleId}/close`, { force }),
+  requestLoan: (id, payload) => request('POST', `/groups/${id}/loans`, payload),
+  decideLoan: (id, loanId, decision) => request('POST', `/groups/${id}/loans/${loanId}/decide`, { decision }),
+  markLoanRepaid: (id, loanId) => request('POST', `/groups/${id}/loans/${loanId}/mark-repaid`),
+  confirmLoanRepaid: (id, loanId) => request('POST', `/groups/${id}/loans/${loanId}/confirm-repaid`),
+};  join: (id) => request('POST', `/groups/${id}/join`),
+  contribute: (id, cycleId, amount) => request('POST', `/groups/${id}/cycles/${cycleId}/contribute`, { amount }),
+  confirm: (id, cycleId, telegram_id) => request('POST', `/groups/${id}/cycles/${cycleId}/confirm`, { telegram_id }),
+  closeCycle: (id, cycleId, force = false) => request('POST', `/groups/${id}/cycles/${cycleId}/close`, { force }),
 };
