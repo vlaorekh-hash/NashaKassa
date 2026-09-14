@@ -63,6 +63,33 @@ CREATE TABLE IF NOT EXISTS contributions (
   created_at      TEXT NOT NULL DEFAULT (datetime('now')),
   UNIQUE(cycle_id, telegram_id)
 );
+
+-- Займы из общей копилки (НЗ на чёрный день) — только для касс type='goal'.
+-- Деньги физически держит создатель кассы (неформальный казначей); эти таблицы —
+-- только учёт и голосование "согласны ли остальные", как и вся остальная модель.
+CREATE TABLE IF NOT EXISTS loans (
+  id                    INTEGER PRIMARY KEY AUTOINCREMENT,
+  group_id              TEXT NOT NULL REFERENCES groups(id),
+  borrower_telegram_id  INTEGER NOT NULL REFERENCES users(telegram_id),
+  amount                INTEGER NOT NULL,
+  reason                TEXT,
+  due_date              TEXT NOT NULL,
+  status                TEXT NOT NULL DEFAULT 'pending' CHECK (status IN ('pending','approved','rejected','repaid')),
+  decided_at            TEXT,
+  repay_marked_at       TEXT,
+  repay_confirmed_by    INTEGER REFERENCES users(telegram_id),
+  repay_confirmed_at    TEXT,
+  created_at            TEXT NOT NULL DEFAULT (datetime('now'))
+);
+
+CREATE TABLE IF NOT EXISTS loan_approvals (
+  id            INTEGER PRIMARY KEY AUTOINCREMENT,
+  loan_id       INTEGER NOT NULL REFERENCES loans(id),
+  telegram_id   INTEGER NOT NULL REFERENCES users(telegram_id),
+  decision      TEXT NOT NULL CHECK (decision IN ('approved','rejected')),
+  created_at    TEXT NOT NULL DEFAULT (datetime('now')),
+  UNIQUE(loan_id, telegram_id)
+);
 `);
 
 export function upsertUser({ telegram_id, first_name, username }) {
