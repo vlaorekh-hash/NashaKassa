@@ -8,6 +8,7 @@ import { fileURLToPath } from 'node:url';
 import { router } from './routes.js';
 import { telegramAuthMiddleware } from './telegramAuth.js';
 import { createBot, startReminderSweep } from './bot.js';
+import { initNotifier } from './notify.js';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 
@@ -74,6 +75,9 @@ process.on('unhandledRejection', (err) => {
 
 if (BOT_TOKEN) {
   const bot = createBot(BOT_TOKEN, WEBAPP_URL);
+  // bot.telegram (отправка сообщений) не зависит от long-polling — включаем уведомления
+  // сразу, ещё до/независимо от startBotWithRetry().
+  initNotifier(bot, WEBAPP_URL);
   startBotWithRetry(bot);
   startReminderSweep(bot, WEBAPP_URL);
 
