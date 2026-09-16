@@ -229,6 +229,7 @@ function GroupDetail({ groupId, me, onBack }) {
   const [copied, setCopied] = useState(false);
   const [err, setErr] = useState(null);
   const [showLoanForm, setShowLoanForm] = useState(false);
+  const [showAssemblyForm, setShowAssemblyForm] = useState(false);
 
   const reload = useCallback(async () => {
     const res = await api.group(groupId);
@@ -242,9 +243,12 @@ function GroupDetail({ groupId, me, onBack }) {
   if (err) return <Centered>{err}</Centered>;
   if (!data) return <Centered>Загрузка…</Centered>;
 
-  const { group, members, creator, cycle, isCreator, fundTotal, outstandingLoans, availableBalance, loans } = data;
+  const {
+    group, members, creator, treasurer, cycle, isCreator, isTreasurer,
+    fundTotal, outstandingLoans, availableBalance, loans, assembly,
+  } = data;
   const isRecipient = cycle?.recipient?.telegram_id === me.telegram_id;
-  const canManage = isCreator || isRecipient;
+  const canManage = isCreator || isRecipient || isTreasurer;
   const isGoal = group.type === 'goal';
 
   const myContribution = cycle?.contributions.find((c) => c.telegram_id === me.telegram_id);
@@ -348,6 +352,19 @@ function GroupDetail({ groupId, me, onBack }) {
     }
   };
 
+  const doStartAssembly = async ({ goal_amount, monthly_amount }) => {
+    setBusy(true);
+    try {
+      await api.startAssembly(groupId, { goal_amount, monthly_amount });
+      setShowAssemblyForm(false);
+      await reload();
+    } catch (e) {
+      alert('Не получилось начать собрание.');
+    } finally {
+      setBusy(false);
+    }
+  };
+
   return (
     <div className="screen">
       <header className="header">
@@ -408,6 +425,18 @@ function GroupDetail({ groupId, me, onBack }) {
         )}
       </section>
 
+      {isGoal && (
+        <AssemblySection
+          assembly={assembly}
+          isCreator={isCreator}
+          group={group}
+          busy={busy}
+          showForm={showAssemblyForm}
+          onToggleForm={() => setShowAssemblyForm((v) => !v)}
+          onStart={doStartAssembly}
+        />
+      )}
+
       {cycle && !isRecipient && (
         <section className="panel">
           <h2>Ваш взнос — {money(group.amount)}</h2>
@@ -420,14 +449,14 @@ function GroupDetail({ groupId, me, onBack }) {
             )
           )}
 
-          {isGoal && isCreator && (
+          {isGoal && isTreasurer && (
             <p className="hint">Вы — казначей кассы: отложите свою часть в общий фонд НЗ и отметьте взнос.</p>
           )}
-          {isGoal && !isCreator && (
-            creator?.payment_details ? (
-              <p className="hint">Переведите через СБП по реквизитам создателя кассы (он хранит общий фонд НЗ): <b>{creator.payment_details}</b></p>
+          {isGoal && !isTreasurer && (
+            treasurer?.payment_details ? (
+              <p className="hint">Переведите через СБП по реквизитам казначея кассы (он хранит общий фонд НЗ): <b>{treasurer.payment_details}</b></p>
             ) : (
-              <p className="hint">Создатель кассы ещё не указал реквизиты — уточните у него в чате.</p>
+              <p className="hint">Казначей кассы ({treasurer?.first_name || '—'}) ещё не указал реквизиты — уточните у него в чате.</p>
             )
           )}
 
@@ -484,8 +513,9 @@ function GroupDetail({ groupId, me, onBack }) {
         <LoansSection
           loans={loans}
           me={me}
-          isCreator={isCreator}
+          isTreasurer={isTreasurer}
           availableBalance={availableBalance}
+          loanApprovalRule={group.loan_approval_rule}
           busy={busy}
           showForm={showLoanForm}
           onToggleForm={() => setShowLoanForm((v) => !v)}
@@ -518,7 +548,7 @@ const LOAN_STATUS_LABEL = {
 };
 
 function LoansSection({
-  loans, me, isCreator, availableBalance, busy,
+  loans, me, isTreasurer, availableBalance, loanApprovalRule, busy,
   showForm, onToggleForm, onRequest, onDecide, onMarkRepaid, onConfirmRepaid,
 }) {
   const [amount, setAmount] = useState('');
@@ -575,14 +605,14 @@ function LoansSection({
                 {loan.status === 'approved' && (
                   <>
                     {loan.repay_marked_at ? (
-                      <div className="hint">Заёмщик отметил возврат — {isCreator ? 'подтвердите получение' : 'ждём подтверждения от казначея'}.</div>
+                      <div className="hint">Заёмщик отметил возврат — {isTreasurer ? 'подтвердите получение' : 'ждём подтверждения от казначея'}.</div>
                     ) : (
                       <div className="hint">Деньги выданы, ждём возврата.</div>
                     )}
                     {isBorrower && !loan.repay_marked_at && (
                       <button className="smallBtn" disabled={busy} onClick={() => onMarkRepaid(loan.id)}>Я вернул(а) — отметить</button>
                     )}
-                    {isCreator && loan.repay_marked_at && (
+                    {isTreasurer && loan.repay_marked_at && (
                       <button className="smallBtn" disabled={busy} onClick={() => onConfirmRepaid(loan.id)}>Подтвердить получение</button>
                     )}
                   </>
@@ -599,7 +629,9 @@ function LoansSection({
 
       {showForm && (
         <form className="form" onSubmit={submit} style={{ marginTop: 12 }}>
-          <p className="fieldHint">Доступно для займов: {money(availableBalance ?? 0)}. Займ выдаётся только с согласия всех остальных участников.</p>
+          <p className="fieldHint">
+            Доступно для займов: {money(availableBalance ?? 0)}. Займ одобряется {loanApprovalRule === 'majority' ? 'большинством голосов остальных участников' : 'только с согласия всех остальных участников'}.
+          </p>
           <label>
             Сумма, ₽
             <input type="number" min="1" value={amount} onChange={(e) => setAmount(e.target.value)} required />
@@ -614,6 +646,83 @@ function LoansSection({
           </label>
           <div className="row" style={{ gap: 8 }}>
             <button className="primaryBtn" type="submit" disabled={busy}>Отправить на согласование</button>
+            <button className="dangerBtn" type="button" disabled={busy} onClick={onToggleForm}>Отмена</button>
+          </div>
+        </form>
+      )}
+    </section>
+  );
+}
+
+const ASSEMBLY_ITEM_LABEL = {
+  treasurer: 'Пункт 1 — выборы казначея',
+  goal: 'Пункт 2 — цель и взносы',
+  loan_rule: 'Пункт 3 — правило одобрения займов',
+};
+
+function AssemblySection({ assembly, isCreator, group, busy, showForm, onToggleForm, onStart }) {
+  const [goalAmount, setGoalAmount] = useState(group.goal_amount ? String(group.goal_amount) : '');
+  const [monthlyAmount, setMonthlyAmount] = useState(String(group.amount || ''));
+  const [showCharter, setShowCharter] = useState(false);
+
+  const submit = (e) => {
+    e.preventDefault();
+    onStart({ goal_amount: goalAmount ? Number(goalAmount) : null, monthly_amount: Number(monthlyAmount) });
+  };
+
+  const isActive = assembly?.status === 'active';
+  const isCompleted = assembly?.status === 'completed';
+
+  return (
+    <section className="panel">
+      <h2>Учредительное собрание</h2>
+
+      {isActive && (
+        <>
+          <p className="hint">{ASSEMBLY_ITEM_LABEL[assembly.currentItem] || 'Собрание идёт'}</p>
+          <p className="muted">Проголосовали: {assembly.votesCount} из {assembly.totalMembers}. Ответьте на сообщение бота в личке.</p>
+        </>
+      )}
+
+      {isCompleted && (
+        <>
+          <p className="hint success">Устав принят ✓</p>
+          <button className="linkBtn" onClick={() => setShowCharter((v) => !v)}>
+            {showCharter ? 'Скрыть устав' : 'Показать устав'}
+          </button>
+          {showCharter && (
+            <p className="hint" style={{ whiteSpace: 'pre-line', marginTop: 8 }}>{assembly.charter_text}</p>
+          )}
+        </>
+      )}
+
+      {!assembly && (
+        <p className="hint">
+          Устав кассы ещё не принят.{' '}
+          {isCreator
+            ? 'Начните учредительное собрание, чтобы всей группой выбрать казначея, утвердить цель/взнос и правило одобрения займов.'
+            : 'Организатор кассы может начать учредительное собрание.'}
+        </p>
+      )}
+
+      {!isActive && isCreator && !showForm && (
+        <button className="primaryBtn" disabled={busy} onClick={onToggleForm}>
+          {assembly ? 'Провести собрание заново' : 'Начать учредительное собрание'}
+        </button>
+      )}
+
+      {!isActive && isCreator && showForm && (
+        <form className="form" onSubmit={submit} style={{ marginTop: 12 }}>
+          <label>
+            Цель НЗ, ₽
+            <input type="number" min="1" value={goalAmount} onChange={(e) => setGoalAmount(e.target.value)} />
+          </label>
+          <label>
+            Ежемесячный взнос с участника, ₽
+            <input type="number" min="1" value={monthlyAmount} onChange={(e) => setMonthlyAmount(e.target.value)} required />
+          </label>
+          <div className="row" style={{ gap: 8 }}>
+            <button className="primaryBtn" type="submit" disabled={busy}>Начать голосование</button>
             <button className="dangerBtn" type="button" disabled={busy} onClick={onToggleForm}>Отмена</button>
           </div>
         </form>
