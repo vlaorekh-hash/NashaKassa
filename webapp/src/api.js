@@ -42,4 +42,5 @@ export const api = {
   decideLoan: (id, loanId, decision) => request('POST', `/groups/${id}/loans/${loanId}/decide`, { decision }),
   markLoanRepaid: (id, loanId) => request('POST', `/groups/${id}/loans/${loanId}/mark-repaid`),
   confirmLoanRepaid: (id, loanId) => request('POST', `/groups/${id}/loans/${loanId}/confirm-repaid`),
+  startAssembly: (id, payload) => request('POST', `/groups/${id}/assembly`, payload),
 };
