@@ -1,10 +1,15 @@
 import { nanoid } from 'nanoid';
 import { db, upsertUser } from './db.js';
+import { notify } from './notify.js';
 
 const DAY_MS = 24 * 60 * 60 * 1000;
 
 function isoInDays(days) {
   return new Date(Date.now() + days * DAY_MS).toISOString();
+}
+
+function money(n) {
+  return new Intl.NumberFormat('ru-RU').format(n) + ' ₽';
 }
 
 export function createGroup(creator, { name, type, amount, frequency_days, goal_amount, goal_deadline }) {
@@ -65,6 +70,13 @@ export function joinGroup(groupId, user) {
   db.prepare(`
     INSERT INTO group_members (group_id, telegram_id, join_order) VALUES (?, ?, ?)
   `).run(groupId, user.telegram_id, maxOrder + 1);
+
+  const others = db.prepare(
+    'SELECT telegram_id FROM group_members WHERE group_id = ? AND telegram_id != ? AND active = 1'
+  ).all(groupId, user.telegram_id);
+  for (const o of others) {
+    notify(o.telegram_id, `${user.first_name} присоединился(-ась) к кассе «${group.name}».`, groupId);
+  }
 
   return getGroupDetail(groupId, user.telegram_id);
 }
@@ -179,7 +191,7 @@ export function getGroupDetail(groupId, requesterId) {
 }
 
 export function contribute(groupId, cycleId, user, amount) {
-  const { cycle } = assertOpenCycle(groupId, cycleId);
+  const { group, cycle } = assertOpenCycle(groupId, cycleId);
   assertMember(groupId, user.telegram_id);
   upsertUser(user);
 
@@ -189,6 +201,13 @@ export function contribute(groupId, cycleId, user, amount) {
     ON CONFLICT(cycle_id, telegram_id) DO UPDATE SET amount = excluded.amount, status = 'pending',
       confirmed_by = NULL, confirmed_at = NULL
   `).run(cycle.id, user.telegram_id, amount);
+
+  // Кому нужно подтвердить получение: в ротационной кассе — получателю цикла,
+  // в накопительной — создателю (он же неформальный казначей общего фонда).
+  const confirmerId = group.type === 'rotation' ? cycle.recipient_telegram_id : group.created_by;
+  if (confirmerId && confirmerId !== user.telegram_id) {
+    notify(confirmerId, `${user.first_name} отметил(а) взнос ${money(amount)} в кассе «${group.name}» — нужно подтвердить получение.`, groupId);
+  }
 
   return getGroupDetail(groupId, user.telegram_id);
 }
@@ -207,6 +226,10 @@ export function confirmContribution(groupId, cycleId, payerTelegramId, confirmer
     UPDATE contributions SET status = 'confirmed', confirmed_by = ?, confirmed_at = datetime('now')
     WHERE id = ?
   `).run(confirmer.telegram_id, row.id);
+
+  if (payerTelegramId !== confirmer.telegram_id) {
+    notify(payerTelegramId, `Ваш взнос ${money(row.amount)} в кассе «${group.name}» подтверждён ✓`, groupId);
+  }
 
   return getGroupDetail(groupId, confirmer.telegram_id);
 }
@@ -254,6 +277,23 @@ export function closeCycleAndRotate(groupId, cycleId, requester, { force = false
   });
   tx();
 
+  if (group.type === 'rotation') {
+    const nextIndex = (cycle.cycle_number) % members.length;
+    const nextRecipient = members[nextIndex].telegram_id;
+    const nextRecipientUser = db.prepare('SELECT first_name FROM users WHERE telegram_id = ?').get(nextRecipient);
+    const expectedTotal = group.amount * members.length;
+    for (const m of members) {
+      const text = m.telegram_id === nextRecipient
+        ? `Цикл в кассе «${group.name}» закрыт — теперь ваша очередь получать выплату: ${money(expectedTotal)}.`
+        : `Цикл в кассе «${group.name}» закрыт. Следующий получатель — ${nextRecipientUser?.first_name || 'участник группы'}.`;
+      notify(m.telegram_id, text, groupId);
+    }
+  } else {
+    for (const m of members) {
+      notify(m.telegram_id, `Открыт новый период сбора взносов в кассе «${group.name}» — не забудьте отметить взнос ${money(group.amount)}.`, groupId);
+    }
+  }
+
   return getGroupDetail(groupId, requester.telegram_id);
 }
 
@@ -293,6 +333,14 @@ export function requestLoan(groupId, user, { amount, reason, term_days }) {
     VALUES (?, ?, ?, ?, ?)
   `).run(groupId, user.telegram_id, amount, (reason || '').trim().slice(0, 300) || null, dueDate);
 
+  const voters = db.prepare(
+    'SELECT telegram_id FROM group_members WHERE group_id = ? AND telegram_id != ? AND active = 1'
+  ).all(groupId, user.telegram_id);
+  const reasonText = reason ? ` На: «${reason.trim().slice(0, 300)}».` : '';
+  for (const v of voters) {
+    notify(v.telegram_id, `${user.first_name} запросил(а) заём ${money(amount)} из фонда кассы «${group.name}».${reasonText} Нужно ваше согласие.`, groupId);
+  }
+
   return getGroupDetail(groupId, user.telegram_id);
 }
 
@@ -307,6 +355,8 @@ export function decideLoan(groupId, loanId, user, decision) {
   if (loan.status !== 'pending') throw httpError(400, 'loan_not_pending');
   if (loan.borrower_telegram_id === user.telegram_id) throw httpError(400, 'borrower_cannot_vote');
 
+  let finalStatus = null;
+
   const tx = db.transaction(() => {
     db.prepare(`
       INSERT INTO loan_approvals (loan_id, telegram_id, decision)
@@ -317,6 +367,7 @@ export function decideLoan(groupId, loanId, user, decision) {
     if (decision === 'rejected') {
       // Единогласное решение: одного отказа достаточно, чтобы займ не состоялся.
       db.prepare(`UPDATE loans SET status = 'rejected', decided_at = datetime('now') WHERE id = ?`).run(loanId);
+      finalStatus = 'rejected';
       return;
     }
 
@@ -334,9 +385,19 @@ export function decideLoan(groupId, loanId, user, decision) {
     const allApproved = votersNeeded.length > 0 && votersNeeded.every((id) => approvedIds.includes(id));
     if (allApproved) {
       db.prepare(`UPDATE loans SET status = 'approved', decided_at = datetime('now') WHERE id = ?`).run(loanId);
+      finalStatus = 'approved';
     }
   });
   tx();
+
+  if (finalStatus === 'rejected') {
+    notify(loan.borrower_telegram_id, `Заём ${money(loan.amount)} в кассе «${group.name}» отклонён — для выдачи займа нужно согласие всех участников.`, groupId);
+  } else if (finalStatus === 'approved') {
+    notify(loan.borrower_telegram_id, `Заём ${money(loan.amount)} в кассе «${group.name}» одобрен единогласно.`, groupId);
+    if (group.created_by !== loan.borrower_telegram_id) {
+      notify(group.created_by, `Заём ${money(loan.amount)} в кассе «${group.name}» одобрен всеми участниками — можно выдавать.`, groupId);
+    }
+  }
 
   return getGroupDetail(groupId, user.telegram_id);
 }
@@ -348,6 +409,12 @@ export function markLoanRepaid(groupId, loanId, user) {
   if (loan.borrower_telegram_id !== user.telegram_id) throw httpError(403, 'only_borrower_can_mark');
 
   db.prepare(`UPDATE loans SET repay_marked_at = datetime('now') WHERE id = ?`).run(loanId);
+
+  const group = db.prepare('SELECT * FROM groups WHERE id = ?').get(groupId);
+  if (group && group.created_by !== user.telegram_id) {
+    notify(group.created_by, `${user.first_name} отметил(а) возврат займа ${money(loan.amount)} в кассе «${group.name}» — подтвердите получение.`, groupId);
+  }
+
   return getGroupDetail(groupId, user.telegram_id);
 }
 
@@ -364,6 +431,10 @@ export function confirmLoanRepaid(groupId, loanId, confirmer) {
     UPDATE loans SET status = 'repaid', repay_confirmed_by = ?, repay_confirmed_at = datetime('now')
     WHERE id = ?
   `).run(confirmer.telegram_id, loanId);
+
+  if (loan.borrower_telegram_id !== confirmer.telegram_id) {
+    notify(loan.borrower_telegram_id, `Возврат займа ${money(loan.amount)} в кассе «${group.name}» подтверждён, спасибо!`, groupId);
+  }
 
   return getGroupDetail(groupId, confirmer.telegram_id);
 }
