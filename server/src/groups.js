@@ -1,6 +1,7 @@
 import { nanoid } from 'nanoid';
 import { db, upsertUser } from './db.js';
 import { notify } from './notify.js';
+import { currentItem as currentAssemblyItem } from './assembly.js';
 
 const DAY_MS = 24 * 60 * 60 * 1000;
 
@@ -103,11 +104,18 @@ export function getGroupDetail(groupId, requesterId) {
   const isMember = members.some((m) => m.telegram_id === requesterId);
   if (!isMember) throw httpError(403, 'not_a_member');
 
-  // Создатель кассы — неформальный казначей: для накопительных касс именно ему
-  // физически переводят взносы и он же выдаёт займы из общей суммы.
   const creator = db.prepare(
     'SELECT telegram_id, first_name, username, payment_details FROM users WHERE telegram_id = ?'
   ).get(group.created_by);
+
+  // Казначей: кому физически переводят взносы и кто выдаёт займы из общей суммы.
+  // По умолчанию (пока не проведено учредительное собрание) — это создатель кассы.
+  const treasurerId = group.treasurer_telegram_id || group.created_by;
+  const treasurer = treasurerId === group.created_by
+    ? creator
+    : db.prepare(
+        'SELECT telegram_id, first_name, username, payment_details FROM users WHERE telegram_id = ?'
+      ).get(treasurerId);
 
   const cycle = db.prepare(`
     SELECT * FROM cycles WHERE group_id = ? AND status = 'open' ORDER BY cycle_number DESC LIMIT 1
@@ -169,10 +177,28 @@ export function getGroupDetail(groupId, requesterId) {
     });
   }
 
+  let assembly = null;
+  if (group.type === 'goal') {
+    const latest = db.prepare(
+      'SELECT * FROM assemblies WHERE group_id = ? ORDER BY id DESC LIMIT 1'
+    ).get(groupId);
+    if (latest) {
+      const openItem = currentAssemblyItem(latest);
+      let votesCount = 0;
+      if (openItem) {
+        votesCount = db.prepare(
+          'SELECT COUNT(*) AS n FROM assembly_votes WHERE assembly_id = ? AND item = ?'
+        ).get(latest.id, openItem).n;
+      }
+      assembly = { ...latest, currentItem: openItem, votesCount, totalMembers: activeMembers.length };
+    }
+  }
+
   return {
     group,
     members,
     creator,
+    treasurer,
     cycle: cycle
       ? {
           ...cycle,
@@ -186,7 +212,9 @@ export function getGroupDetail(groupId, requesterId) {
     outstandingLoans,
     availableBalance,
     loans,
+    assembly,
     isCreator: group.created_by === requesterId,
+    isTreasurer: treasurerId === requesterId,
   };
 }
 
@@ -203,8 +231,8 @@ export function contribute(groupId, cycleId, user, amount) {
   `).run(cycle.id, user.telegram_id, amount);
 
   // Кому нужно подтвердить получение: в ротационной кассе — получателю цикла,
-  // в накопительной — создателю (он же неформальный казначей общего фонда).
-  const confirmerId = group.type === 'rotation' ? cycle.recipient_telegram_id : group.created_by;
+  // в накопительной — казначею (по умолчанию это создатель, пока не выбран другой).
+  const confirmerId = group.type === 'rotation' ? cycle.recipient_telegram_id : (group.treasurer_telegram_id || group.created_by);
   if (confirmerId && confirmerId !== user.telegram_id) {
     notify(confirmerId, `${user.first_name} отметил(а) взнос ${money(amount)} в кассе «${group.name}» — нужно подтвердить получение.`, groupId);
   }
@@ -214,7 +242,10 @@ export function contribute(groupId, cycleId, user, amount) {
 
 export function confirmContribution(groupId, cycleId, payerTelegramId, confirmer) {
   const { group, cycle } = assertOpenCycle(groupId, cycleId);
-  const canConfirm = group.created_by === confirmer.telegram_id || cycle.recipient_telegram_id === confirmer.telegram_id;
+  const treasurerId = group.treasurer_telegram_id || group.created_by;
+  const canConfirm = group.created_by === confirmer.telegram_id
+    || treasurerId === confirmer.telegram_id
+    || cycle.recipient_telegram_id === confirmer.telegram_id;
   if (!canConfirm) throw httpError(403, 'only_recipient_or_creator_can_confirm');
 
   const row = db.prepare(
@@ -236,7 +267,10 @@ export function confirmContribution(groupId, cycleId, payerTelegramId, confirmer
 
 export function closeCycleAndRotate(groupId, cycleId, requester, { force = false } = {}) {
   const { group, cycle } = assertOpenCycle(groupId, cycleId);
-  const canClose = group.created_by === requester.telegram_id || cycle.recipient_telegram_id === requester.telegram_id;
+  const treasurerId = group.treasurer_telegram_id || group.created_by;
+  const canClose = group.created_by === requester.telegram_id
+    || treasurerId === requester.telegram_id
+    || cycle.recipient_telegram_id === requester.telegram_id;
   if (!canClose) throw httpError(403, 'only_recipient_or_creator_can_close');
 
   const members = db.prepare(
@@ -364,8 +398,10 @@ export function decideLoan(groupId, loanId, user, decision) {
       ON CONFLICT(loan_id, telegram_id) DO UPDATE SET decision = excluded.decision, created_at = datetime('now')
     `).run(loanId, user.telegram_id, decision);
 
-    if (decision === 'rejected') {
-      // Единогласное решение: одного отказа достаточно, чтобы займ не состоялся.
+    const isMajorityRule = group.loan_approval_rule === 'majority';
+
+    if (decision === 'rejected' && !isMajorityRule) {
+      // Единогласное правило (по умолчанию): одного отказа достаточно, чтобы займ не состоялся.
       db.prepare(`UPDATE loans SET status = 'rejected', decided_at = datetime('now') WHERE id = ?`).run(loanId);
       finalStatus = 'rejected';
       return;
@@ -378,24 +414,41 @@ export function decideLoan(groupId, loanId, user, decision) {
       .filter((m) => m.telegram_id !== loan.borrower_telegram_id)
       .map((m) => m.telegram_id);
 
-    const approvedIds = db.prepare(
-      `SELECT telegram_id FROM loan_approvals WHERE loan_id = ? AND decision = 'approved'`
-    ).all(loanId).map((r) => r.telegram_id);
+    const decided = db.prepare(
+      'SELECT telegram_id, decision FROM loan_approvals WHERE loan_id = ?'
+    ).all(loanId).filter((r) => votersNeeded.includes(r.telegram_id));
+    const approvedIds = decided.filter((r) => r.decision === 'approved').map((r) => r.telegram_id);
+    const rejectedIds = decided.filter((r) => r.decision === 'rejected').map((r) => r.telegram_id);
 
-    const allApproved = votersNeeded.length > 0 && votersNeeded.every((id) => approvedIds.includes(id));
-    if (allApproved) {
-      db.prepare(`UPDATE loans SET status = 'approved', decided_at = datetime('now') WHERE id = ?`).run(loanId);
-      finalStatus = 'approved';
+    if (isMajorityRule) {
+      const majorityThreshold = Math.floor(votersNeeded.length / 2) + 1;
+      if (approvedIds.length >= majorityThreshold) {
+        db.prepare(`UPDATE loans SET status = 'approved', decided_at = datetime('now') WHERE id = ?`).run(loanId);
+        finalStatus = 'approved';
+      } else if (rejectedIds.length >= majorityThreshold || decided.length === votersNeeded.length) {
+        // Большинство против, либо все проголосовали и большинства "за" не набралось.
+        db.prepare(`UPDATE loans SET status = 'rejected', decided_at = datetime('now') WHERE id = ?`).run(loanId);
+        finalStatus = 'rejected';
+      }
+    } else {
+      const allApproved = votersNeeded.length > 0 && votersNeeded.every((id) => approvedIds.includes(id));
+      if (allApproved) {
+        db.prepare(`UPDATE loans SET status = 'approved', decided_at = datetime('now') WHERE id = ?`).run(loanId);
+        finalStatus = 'approved';
+      }
     }
   });
   tx();
 
+  const treasurerId = group.treasurer_telegram_id || group.created_by;
   if (finalStatus === 'rejected') {
-    notify(loan.borrower_telegram_id, `Заём ${money(loan.amount)} в кассе «${group.name}» отклонён — для выдачи займа нужно согласие всех участников.`, groupId);
+    const ruleText = group.loan_approval_rule === 'majority' ? 'большинством участников' : 'для выдачи займа нужно согласие всех участников';
+    notify(loan.borrower_telegram_id, `Заём ${money(loan.amount)} в кассе «${group.name}» отклонён — ${ruleText}.`, groupId);
   } else if (finalStatus === 'approved') {
-    notify(loan.borrower_telegram_id, `Заём ${money(loan.amount)} в кассе «${group.name}» одобрен единогласно.`, groupId);
-    if (group.created_by !== loan.borrower_telegram_id) {
-      notify(group.created_by, `Заём ${money(loan.amount)} в кассе «${group.name}» одобрен всеми участниками — можно выдавать.`, groupId);
+    const ruleText = group.loan_approval_rule === 'majority' ? 'большинством голосов' : 'единогласно';
+    notify(loan.borrower_telegram_id, `Заём ${money(loan.amount)} в кассе «${group.name}» одобрен ${ruleText}.`, groupId);
+    if (treasurerId !== loan.borrower_telegram_id) {
+      notify(treasurerId, `Заём ${money(loan.amount)} в кассе «${group.name}» одобрен — можно выдавать.`, groupId);
     }
   }
 
@@ -411,8 +464,9 @@ export function markLoanRepaid(groupId, loanId, user) {
   db.prepare(`UPDATE loans SET repay_marked_at = datetime('now') WHERE id = ?`).run(loanId);
 
   const group = db.prepare('SELECT * FROM groups WHERE id = ?').get(groupId);
-  if (group && group.created_by !== user.telegram_id) {
-    notify(group.created_by, `${user.first_name} отметил(а) возврат займа ${money(loan.amount)} в кассе «${group.name}» — подтвердите получение.`, groupId);
+  const treasurerId = group ? (group.treasurer_telegram_id || group.created_by) : null;
+  if (treasurerId && treasurerId !== user.telegram_id) {
+    notify(treasurerId, `${user.first_name} отметил(а) возврат займа ${money(loan.amount)} в кассе «${group.name}» — подтвердите получение.`, groupId);
   }
 
   return getGroupDetail(groupId, user.telegram_id);
@@ -421,7 +475,8 @@ export function markLoanRepaid(groupId, loanId, user) {
 export function confirmLoanRepaid(groupId, loanId, confirmer) {
   const group = db.prepare('SELECT * FROM groups WHERE id = ?').get(groupId);
   if (!group) throw httpError(404, 'group_not_found');
-  if (group.created_by !== confirmer.telegram_id) throw httpError(403, 'only_creator_can_confirm');
+  const treasurerId = group.treasurer_telegram_id || group.created_by;
+  if (treasurerId !== confirmer.telegram_id) throw httpError(403, 'only_treasurer_can_confirm');
 
   const loan = db.prepare('SELECT * FROM loans WHERE id = ? AND group_id = ?').get(loanId, groupId);
   if (!loan) throw httpError(404, 'loan_not_found');
