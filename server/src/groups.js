@@ -499,6 +499,55 @@ export function setPaymentDetails(user, text) {
   db.prepare('UPDATE users SET payment_details = ? WHERE telegram_id = ?').run(text || null, user.telegram_id);
 }
 
+// Настройки кассы после учредительного собрания: организатор может поменять казначея,
+// ежемесячный взнос и цель напрямую, без повторного полного голосования. Все остальные
+// участники узнают об изменениях уведомлением — прозрачность вместо нового собрания.
+export function updateGroupSettings(groupId, requester, { treasurer_telegram_id, amount, goal_amount }) {
+  const group = db.prepare('SELECT * FROM groups WHERE id = ?').get(groupId);
+  if (!group) throw httpError(404, 'group_not_found');
+  if (group.type !== 'goal') throw httpError(400, 'settings_only_for_goal_groups');
+  if (group.created_by !== requester.telegram_id) throw httpError(403, 'only_creator_can_edit_settings');
+
+  if (!Number.isFinite(amount) || amount <= 0) throw httpError(400, 'bad_amount');
+  const newGoalAmount = Number.isFinite(goal_amount) && goal_amount > 0 ? goal_amount : null;
+
+  const members = db.prepare(`
+    SELECT m.telegram_id, u.first_name FROM group_members m
+    JOIN users u ON u.telegram_id = m.telegram_id
+    WHERE m.group_id = ? AND m.active = 1
+  `).all(groupId);
+
+  const oldTreasurerId = group.treasurer_telegram_id || group.created_by;
+  let newTreasurerId = oldTreasurerId;
+  if (treasurer_telegram_id != null) {
+    if (!members.some((m) => m.telegram_id === treasurer_telegram_id)) {
+      throw httpError(400, 'treasurer_must_be_active_member');
+    }
+    newTreasurerId = treasurer_telegram_id;
+  }
+
+  const changes = [];
+  if (newTreasurerId !== oldTreasurerId) {
+    changes.push(`казначей теперь ${members.find((m) => m.telegram_id === newTreasurerId)?.first_name || '—'}`);
+  }
+  if (amount !== group.amount) changes.push(`ежемесячный взнос — ${money(amount)}`);
+  if (newGoalAmount !== group.goal_amount) {
+    changes.push(newGoalAmount ? `цель НЗ — ${money(newGoalAmount)}` : 'цель НЗ снята');
+  }
+
+  db.prepare('UPDATE groups SET treasurer_telegram_id = ?, amount = ?, goal_amount = ? WHERE id = ?')
+    .run(newTreasurerId, amount, newGoalAmount, groupId);
+
+  if (changes.length) {
+    for (const m of members) {
+      if (m.telegram_id === requester.telegram_id) continue;
+      notify(m.telegram_id, `Настройки кассы «${group.name}» изменены: ${changes.join(', ')}.`, groupId);
+    }
+  }
+
+  return getGroupDetail(groupId, requester.telegram_id);
+}
+
 // --- helpers ---
 
 function assertMember(groupId, telegramId) {
