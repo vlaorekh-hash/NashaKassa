@@ -90,7 +90,50 @@ CREATE TABLE IF NOT EXISTS loan_approvals (
   created_at    TEXT NOT NULL DEFAULT (datetime('now')),
   UNIQUE(loan_id, telegram_id)
 );
+
+-- Учредительное собрание кассы: администратор (создатель) запускает голосование по трём
+-- пунктам устава — казначей, цель/взнос, правило одобрения займов. Бот ведёт голосование
+-- личными сообщениями каждому участнику (см. assemblyFlow.js), здесь только учёт итогов.
+CREATE TABLE IF NOT EXISTS assemblies (
+  id                       INTEGER PRIMARY KEY AUTOINCREMENT,
+  group_id                 TEXT NOT NULL REFERENCES groups(id),
+  status                   TEXT NOT NULL DEFAULT 'active' CHECK (status IN ('active','completed')),
+  proposed_goal_amount     INTEGER,
+  proposed_monthly_amount  INTEGER NOT NULL,
+  started_by               INTEGER NOT NULL REFERENCES users(telegram_id),
+  started_at               TEXT NOT NULL DEFAULT (datetime('now')),
+  completed_at             TEXT,
+  result_treasurer_id      INTEGER REFERENCES users(telegram_id),
+  result_goal_decision     TEXT CHECK (result_goal_decision IN ('yes','no')),
+  result_loan_rule         TEXT CHECK (result_loan_rule IN ('unanimous','majority')),
+  charter_text             TEXT
+);
+
+CREATE TABLE IF NOT EXISTS assembly_votes (
+  id            INTEGER PRIMARY KEY AUTOINCREMENT,
+  assembly_id   INTEGER NOT NULL REFERENCES assemblies(id),
+  item          TEXT NOT NULL CHECK (item IN ('treasurer','goal','loan_rule')),
+  telegram_id   INTEGER NOT NULL REFERENCES users(telegram_id),
+  choice        TEXT NOT NULL,
+  created_at    TEXT NOT NULL DEFAULT (datetime('now')),
+  UNIQUE(assembly_id, item, telegram_id)
+);
 `);
+
+// Простая идемпотентная миграция для колонок, добавленных к уже существующей таблице
+// groups (ALTER TABLE ADD COLUMN в SQLite не поддерживает IF NOT EXISTS).
+function ensureColumn(table, column, ddl) {
+  const cols = db.prepare(`PRAGMA table_info(${table})`).all().map((c) => c.name);
+  if (!cols.includes(column)) {
+    db.exec(`ALTER TABLE ${table} ADD COLUMN ${ddl}`);
+  }
+}
+
+// Казначей — кому физически переводят взносы и кто выдаёт займы. По умолчанию (NULL) —
+// это создатель кассы; учредительное собрание может выбрать другого участника.
+ensureColumn('groups', 'treasurer_telegram_id', 'treasurer_telegram_id INTEGER REFERENCES users(telegram_id)');
+// Правило одобрения займов: 'unanimous' (по умолчанию) или 'majority' — решается на собрании.
+ensureColumn('groups', 'loan_approval_rule', "loan_approval_rule TEXT NOT NULL DEFAULT 'unanimous'");
 
 export function upsertUser({ telegram_id, first_name, username }) {
   db.prepare(`
