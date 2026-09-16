@@ -12,6 +12,7 @@ import {
   decideLoan,
   markLoanRepaid,
   confirmLoanRepaid,
+  updateGroupSettings,
 } from './groups.js';
 import { startAssemblyFlow } from './assemblyFlow.js';
 
@@ -99,6 +100,15 @@ router.post('/groups/:id/loans/:loanId/mark-repaid', handle((req) => {
 
 router.post('/groups/:id/loans/:loanId/confirm-repaid', handle((req) => {
   return confirmLoanRepaid(req.params.id, Number(req.params.loanId), currentUser(req));
+}));
+
+router.put('/groups/:id/settings', handle((req) => {
+  const { treasurer_telegram_id, amount, goal_amount } = req.body;
+  return updateGroupSettings(req.params.id, currentUser(req), {
+    treasurer_telegram_id: treasurer_telegram_id != null ? Number(treasurer_telegram_id) : null,
+    amount: Number(amount),
+    goal_amount: goal_amount ? Number(goal_amount) : null,
+  });
 }));
 
 router.post('/groups/:id/assembly', handle((req) => {
