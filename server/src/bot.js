@@ -1,8 +1,28 @@
 import { Telegraf } from 'telegraf';
 import { db } from './db.js';
+import { recordVote } from './assemblyFlow.js';
 
 export function createBot(botToken, webappUrl) {
   const bot = new Telegraf(botToken);
+
+  // Голосование учредительного собрания — нажатие inline-кнопки в личке бота.
+  // callback_data вида "av:<assemblyId>:<item>:<choice>".
+  bot.action(/^av:(\d+):(treasurer|goal|loan_rule):(.+)$/, async (ctx) => {
+    const [, assemblyId, item, choice] = ctx.match;
+    try {
+      const result = recordVote(Number(assemblyId), ctx.from.id, item, choice);
+      await ctx.answerCbQuery(result.toast);
+    } catch (err) {
+      const toast = err.code === 'item_not_open'
+        ? 'Этот пункт уже завершён'
+        : err.code === 'not_a_member'
+          ? 'Вы не участник этой кассы'
+          : 'Не получилось учесть голос';
+      await ctx.answerCbQuery(toast).catch(() => {});
+      return;
+    }
+    await ctx.editMessageReplyMarkup({ inline_keyboard: [] }).catch(() => {});
+  });
 
   bot.start((ctx) => {
     const startParam = ctx.startPayload; // deep-link payload, напр. groupId для приглашения
