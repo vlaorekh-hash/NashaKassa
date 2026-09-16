@@ -23,3 +23,12 @@ export function notify(telegramId, text, groupId) {
     // Пользователь мог не открывать бота (нет chat_id) или заблокировать его — просто пропускаем.
   });
 }
+
+// Сообщение с произвольной inline-клавиатурой (для голосований учредительного собрания —
+// кнопки вида [[{ text: '1. Имя', callback_data: 'av:...' }], ...]).
+export function sendWithButtons(telegramId, text, inlineKeyboard) {
+  if (!bot || !telegramId) return;
+  bot.telegram
+    .sendMessage(telegramId, text, { reply_markup: { inline_keyboard: inlineKeyboard } })
+    .catch(() => {});
+}
